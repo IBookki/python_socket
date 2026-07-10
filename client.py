@@ -25,6 +25,13 @@ COULEURS_PSEUDOS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6",
                     "#a78bfa", "#fb923c", "#22d3ee", "#f87171"]
 
 
+COMMANDES = ["/nick ", "/mp ", "/time", "/ping", "/clear", "/join ",
+             "/leave", "/kick ", "/ban ", "/mute ", "/unmute ",
+             "/setadmin ", "/setmodo ", "/remadmin ", "/remmodo ", "/quit"]
+
+PLACEHOLDER = "Ecris un message ou une commande (/)..."
+
+
 def recevoir_exact(sock, n):
     donnees = b""
     while len(donnees) < n:
@@ -64,6 +71,8 @@ class Fenetre:
     def __init__(self):
         self.en_marche = True
         self.pseudos_vus = {}
+        self.historique = []
+        self.index_hist = 0 
 
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -74,12 +83,13 @@ class Fenetre:
 
         self.fenetre = tk.Tk()
         self.fenetre.title("Chat")
-        self.fenetre.geometry("620x560")
-        self.fenetre.minsize(480, 400)
+        self.fenetre.geometry("620x600")
+        self.fenetre.minsize(480, 440)
         self.fenetre.configure(bg=FOND)
 
         self.construire_header()
         self.construire_zone()
+        self.construire_actions()
         self.construire_barre()
 
         self.fenetre.protocol("WM_DELETE_WINDOW", self.fermer)
@@ -137,11 +147,11 @@ class Fenetre:
         self.zone.tag_config("systeme", foreground=TEXTE_PALE,
                              font=("Segoe UI", 9, "italic"), justify="center",
                              spacing1=8, spacing3=8)
+        self.zone.tag_config("echo", foreground="#5a6270",
+                             font=("Consolas", 9))
         self.zone.tag_config("prive_entete", foreground=VIOLET,
                              font=("Segoe UI", 9, "bold"))
         self.zone.tag_config("prive_corps", foreground=VIOLET)
-        self.zone.tag_config("moi_entete", foreground=ACCENT,
-                             font=("Segoe UI", 9, "bold"))
         self.zone.tag_config("corps", foreground=TEXTE)
         self.zone.tag_config("heure", foreground="#4b5563",
                              font=("Segoe UI", 8))
@@ -152,9 +162,27 @@ class Fenetre:
                              font=("Segoe UI", 9), justify="center",
                              spacing1=8, spacing3=8)
 
-    def construire_barre(self):
+    def construire_actions(self):
+        """Barre de boutons pour les commandes rapides."""
+        barre = tk.Frame(self.fenetre, bg=FOND_BARRE)
+        barre.pack(side="bottom", fill="x")
+
+        boutons = [("Ping", "/ping"), ("Heure", "/time"),
+                   ("Effacer", "/clear"), ("Quitter", "/quit")]
+
+        for texte, cmd in boutons:
+            b = tk.Button(barre, text=texte,
+                          command=lambda c=cmd: self.commande_rapide(c),
+                          bg=FOND_CHAMP, fg=TEXTE_PALE,
+                          font=("Segoe UI", 8), relief="flat",
+                          padx=10, pady=4, cursor="hand2",
+                          activebackground=ACCENT, activeforeground="white",
+                          borderwidth=0)
+            b.pack(side="left", padx=(14 if texte == "Ping" else 4, 0), pady=6)
+
         tk.Frame(self.fenetre, bg="#2c313a", height=1).pack(side="bottom", fill="x")
 
+    def construire_barre(self):
         bas = tk.Frame(self.fenetre, bg=FOND_BARRE, height=64)
         bas.pack(side="bottom", fill="x")
         bas.pack_propagate(False)
@@ -162,12 +190,22 @@ class Fenetre:
         cadre = tk.Frame(bas, bg=FOND_CHAMP)
         cadre.pack(side="left", fill="x", expand=True, padx=(14, 8), pady=13)
 
-        self.champ = tk.Entry(cadre, bg=FOND_CHAMP, fg=TEXTE,
+        self.champ = tk.Entry(cadre, bg=FOND_CHAMP, fg=TEXTE_PALE,
                               font=("Segoe UI", 10), relief="flat",
                               insertbackground=ACCENT, highlightthickness=0)
-        self.champ.pack(fill="both", expand=True, padx=12, pady=9)
+        self.champ.pack(side="left", fill="both", expand=True, padx=(12, 4), pady=9)
+        self.champ.insert(0, PLACEHOLDER)
         self.champ.bind("<Return>", self.envoyer_message)
-        self.champ.focus()
+        self.champ.bind("<Up>", self.hist_precedent)
+        self.champ.bind("<Down>", self.hist_suivant)
+        self.champ.bind("<Tab>", self.completer)
+        self.champ.bind("<FocusIn>", self.effacer_placeholder)
+        self.champ.bind("<FocusOut>", self.remettre_placeholder)
+        self.champ.bind("<KeyRelease>", self.compter)
+
+        self.compteur = tk.Label(cadre, text="0", bg=FOND_CHAMP,
+                                 fg="#4b5563", font=("Segoe UI", 8))
+        self.compteur.pack(side="right", padx=(0, 10))
 
         self.bouton = tk.Button(bas, text="Envoyer", command=self.envoyer_message,
                                 bg=ACCENT, fg="white", font=("Segoe UI", 9, "bold"),
@@ -175,10 +213,72 @@ class Fenetre:
                                 activebackground="#4a7bc0", activeforeground="white",
                                 borderwidth=0)
         self.bouton.pack(side="right", padx=(0, 14), pady=13)
-
         self.bouton.bind("<Enter>", lambda e: self.bouton.config(bg="#4a7bc0"))
         self.bouton.bind("<Leave>", lambda e: self.bouton.config(bg=ACCENT))
 
+
+    def effacer_placeholder(self, event=None):
+        if self.champ.get() == PLACEHOLDER:
+            self.champ.delete(0, "end")
+            self.champ.config(fg=TEXTE)
+
+    def remettre_placeholder(self, event=None):
+        if self.champ.get() == "":
+            self.champ.insert(0, PLACEHOLDER)
+            self.champ.config(fg=TEXTE_PALE)
+
+    def compter(self, event=None):
+        texte = self.champ.get()
+        if texte == PLACEHOLDER:
+            self.compteur.config(text="0")
+        else:
+            self.compteur.config(text=str(len(texte)))
+
+
+    def hist_precedent(self, event=None):
+        if len(self.historique) == 0:
+            return "break"
+        self.index_hist = self.index_hist - 1
+        if self.index_hist < 0:
+            self.index_hist = 0
+        self.effacer_placeholder()
+        self.champ.delete(0, "end")
+        self.champ.insert(0, self.historique[self.index_hist])
+        return "break"
+
+    def hist_suivant(self, event=None):
+        if len(self.historique) == 0:
+            return "break"
+        self.index_hist = self.index_hist + 1
+        self.champ.delete(0, "end")
+        if self.index_hist >= len(self.historique):
+            self.index_hist = len(self.historique)
+            self.champ.config(fg=TEXTE)
+        else:
+            self.champ.insert(0, self.historique[self.index_hist])
+        return "break"
+
+
+    def completer(self, event=None):
+        debut = self.champ.get()
+        if debut == PLACEHOLDER or debut == "" or debut[0] != "/":
+            return "break"
+        for cmd in COMMANDES:
+            if cmd.startswith(debut):
+                self.champ.delete(0, "end")
+                self.champ.insert(0, cmd)
+                break
+        return "break"
+
+
+    def commande_rapide(self, cmd):
+        try:
+            envoyer(self.client, cmd)
+        except:
+            return
+        self.ecrire("> " + cmd + "\n", "echo")
+        if cmd == "/quit":
+            self.fermer()
 
     def ecrire(self, texte, tag):
         self.zone.config(state="normal")
@@ -187,24 +287,21 @@ class Fenetre:
         self.zone.see("end")
 
     def afficher_message(self, pseudo, corps, est_moi=False):
-        """Affiche un message avec l'entete colore et l'heure."""
         self.zone.config(state="normal")
-
         if pseudo not in self.pseudos_vus:
             nom_tag = "pseudo_" + pseudo
             couleur = ACCENT if est_moi else couleur_pseudo(pseudo)
             self.zone.tag_config(nom_tag, foreground=couleur,
                                  font=("Segoe UI", 9, "bold"))
             self.pseudos_vus[pseudo] = nom_tag
-
         self.zone.insert("end", pseudo, self.pseudos_vus[pseudo])
         self.zone.insert("end", "  " + time.strftime("%H:%M") + "\n", "heure")
         self.zone.insert("end", corps + "\n\n", "corps")
-
         self.zone.config(state="disabled")
         self.zone.see("end")
 
     def afficher_prive(self, entete, corps):
+        self.fenetre.bell()
         self.zone.config(state="normal")
         self.zone.insert("end", entete, "prive_entete")
         self.zone.insert("end", "  " + time.strftime("%H:%M") + "\n", "heure")
@@ -215,8 +312,11 @@ class Fenetre:
 
     def envoyer_message(self, event=None):
         message = self.champ.get().strip()
-        if message == "":
+        if message == "" or message == PLACEHOLDER:
             return
+
+        self.historique.append(message)
+        self.index_hist = len(self.historique)
 
         self.champ.delete(0, "end")
 
@@ -225,6 +325,9 @@ class Fenetre:
         except:
             self.ecrire("Erreur d'envoi\n", "erreur")
             return
+
+        if message[0] == "/":
+            self.ecrire("> " + message + "\n", "echo")
 
         if message[0:6] == "/join ":
             self.sous_titre.config(text="salon : " + message[6:].strip())
@@ -240,10 +343,8 @@ class Fenetre:
                 message = recevoir(self.client)
             except:
                 break
-
             if message == None:
                 break
-
             self.traiter(message)
 
         self.en_marche = False
